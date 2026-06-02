@@ -23,8 +23,26 @@ unrelated changes into separate atomic commits, and — by default — only
 
 ## Installation
 
-Clone (or copy) this repository into your Claude Code skills directory so the
-folder is named `commit`:
+### Using the `skills` CLI (recommended)
+
+The [skills](https://github.com/vercel-labs/skills) CLI installs this skill into
+Claude Code (and many other agents) with one command:
+
+```bash
+# Install to the current project
+npx skills add g761007/commit-skill
+
+# Install globally, targeting Claude Code
+npx skills add g761007/commit-skill -g -a claude-code
+
+# List what's in the repo without installing
+npx skills add g761007/commit-skill --list
+```
+
+### Manual install
+
+Clone this repository into your Claude Code skills directory so the folder is
+named `commit`:
 
 ```bash
 git clone https://github.com/g761007/commit-skill.git ~/.claude/skills/commit
