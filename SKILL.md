@@ -19,29 +19,83 @@ message suggestions. The goal is to save the user the work of reviewing the diff
 and phrasing each message, while respecting that the *decision* to commit is
 usually theirs.
 
+This skill orchestrates rather than executes directly: the actual git inspection
+and message-drafting work happens in a subagent (via the Agent tool), not inline
+in the main conversation.
+
 ## Default behavior when invoked with no arguments
 
-This skill is normally invoked directly (e.g. the user types `/commit`)
-with no further description. When that happens, **do not ask what the user wants
-first** — just start the workflow below immediately: inspect the current
-working-tree changes in the repo and produce commit suggestions in suggest mode.
-That is the whole point of invoking it — the user has already told you what they
-want by calling it.
+This skill is normally invoked directly (e.g. the user types `/commit`) with no
+further description. When that happens, **do not ask what the user wants
+first** — just delegate immediately: spawn the subagent described below with
+suggest-mode instructions. That is the whole point of invoking it — the user has
+already told you what they want by calling it.
 
 Only deviate from suggest mode if the invocation itself carries an instruction —
-e.g. `/commit 直接 commit` or a surrounding message like "commit 吧". A bare
-invocation always means: analyze and suggest.
+e.g. `/commit 直接 commit` or a surrounding message like "commit 吧". Pass that
+instruction through to the subagent so it knows whether to actually commit.
+
+## Delegate to a subagent
+
+Do the actual work by calling the **Agent** tool once per invocation — don't run
+the git inspection yourself in the main conversation.
+
+- **subagent_type**: `general-purpose` (needs Bash to inspect git state, Read
+  for untracked files, and Write for the handoff file below).
+- **model**: default to the cheapest available model (currently `haiku`, i.e.
+  Haiku 4.5). This task is mechanical — read a diff, match an existing
+  convention, phrase a message — and doesn't need a stronger model by default.
+  Only use a pricier model (e.g. `sonnet`) if the user explicitly asks for a
+  smarter model, or if a cheap-model run comes back empty/unusable (see
+  "Don't trust the chat reply" below) even after one retry.
+- **prompt**: self-contained — the subagent starts with no memory of this
+  conversation. Include, verbatim or paraphrased:
+  - Whether this is **suggest mode** (default) or **commit mode** (only if the
+    user explicitly asked to commit — phrases like "直接 commit", "commit 吧",
+    "幫我提交", "go ahead and commit").
+  - The full workflow from the "Workflow" section below.
+  - The output format from the "Output format" section below.
+  - Any extra instruction the user gave alongside the invocation (e.g. "only
+    the auth files", "in English", "split by feature").
+  - The **handoff file** instruction below.
+
+### Don't trust the chat reply — use a handoff file
+
+Cheap models reliably run the git commands but are unreliable about putting the
+actual deliverable in their final chat message — in testing, Haiku often ended
+with a bare "Done." / "Suggestion delivered above." instead of the real content,
+even when explicitly told not to. Don't depend on the subagent's final message
+for the deliverable. Instead:
+
+1. Before spawning, pick a path in your scratchpad directory, e.g.
+   `<scratchpad>/commit-suggestion.md`.
+2. In the prompt, instruct the subagent to **Write** its full output (the exact
+   "Output format" content below — or a plain "no changes" / clarifying-question
+   message if that's what applies) to that exact path as its last action, in
+   addition to whatever it says in chat.
+3. After the Agent call returns, **Read that file yourself** — don't rely on
+   what the subagent said back to you. If the file is missing, empty, or
+   clearly doesn't contain the expected output, retry once (same model); if it
+   fails again, retry with `sonnet`.
+4. Relay the file's contents to the user per "After the subagent returns".
 
 ## Core principle: suggest, don't commit (by default)
 
-The default mode is **suggest only**. You analyze the changes and print
-copy-pastable commit messages. You do **not** run `git add` or `git commit`
-unless the user explicitly asks for it (phrases like "直接 commit", "commit 吧",
-"幫我提交", "go ahead and commit"). This matters because committing is hard to undo
-in a shared history, and the user often wants to tweak wording, split differently,
-or stage selectively first. When in doubt, suggest and ask.
+The default mode is **suggest only**. The subagent analyzes the changes and
+prints copy-pastable commit messages. It does **not** run `git add` or
+`git commit` unless the user explicitly asked for it. This matters because
+committing is hard to undo in a shared history, and the user often wants to
+tweak wording, split differently, or stage selectively first. When in doubt,
+suggest mode.
 
-## Workflow
+This also means the subagent must not create, edit, or delete *any* file in
+the project — including things like adding a `.gitignore` to tidy up
+untracked files it noticed. In testing, a cheap model did exactly this
+unprompted, as an unrequested "fix" for clutter it spotted in `git status`.
+Its only filesystem write, ever, is the handoff file described above; tell it
+so explicitly in the prompt.
+
+## Workflow (give this to the subagent)
 
 ### 1. Gather the changes
 
@@ -154,3 +208,11 @@ Fix null token crash on session refresh
 **Example 3 — two unrelated changes in the working tree:**
 A bugfix in the `payments` module and a tweak to a shared `logger` utility.
 Suggest two separate commits, each scoped to its area, with a `git add` for each group.
+
+## After the subagent returns
+
+Read the handoff file (not the subagent's chat reply — see "Don't trust the
+chat reply" above) and relay its contents back to the user **verbatim**. Don't
+compress it into a "summary"; the exact text is what the user will copy. If the
+file says there were no changes, or contains a clarifying question, pass that
+along as-is too.
